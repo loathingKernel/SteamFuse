@@ -8,6 +8,7 @@ import os
 import re
 import sys
 
+import requests
 import orjson
 import vdf
 from xdg import BaseDirectory
@@ -22,7 +23,7 @@ class SteamPath(object):
 
 
 class SteamFuse(Passthrough):
-    def __init__(self, root):
+    def __init__(self, root, applist):
         self.root = os.path.join(root, "steamapps")
         vdf_data = vdf.load(open(os.path.join(self.root, "libraryfolders.vdf"), 'r'))
         self.other_roots = [
@@ -37,7 +38,7 @@ class SteamFuse(Passthrough):
                     self.local_appids.update({vdf_data["AppState"]["appid"]: vdf_data["AppState"]["installdir"]})
 
         self.remote_appids = dict()
-        for app in orjson.loads(open('applist.json', 'r').read())['applist']['apps']:
+        for app in orjson.loads(open(applist, 'r').read())['applist']['apps']:
             self.remote_appids.update({str(app['appid']): app['name']})
 
         self.re_acf = re.compile(r'(app(?:manifest|workshop)_)(\d\d\d+).acf')
@@ -47,8 +48,10 @@ class SteamFuse(Passthrough):
     # Helpers
     # =======
     def _full_path(self, partial):
-        if partial in self.paths.keys():
+        try:
             partial = self.paths[partial]
+        except KeyError:
+            pass
         if partial.startswith("/"):
             partial = partial[1:]
         path = os.path.join(self.root, partial)
@@ -125,10 +128,17 @@ class SteamFuse(Passthrough):
 
 
 def main(root, mountpoint=None):
+
+    applist = os.path.join(BaseDirectory.save_cache_path("SteamFuse"), "applist.json")
+    if not os.path.exists(applist):
+        url = 'https://api.steampowered.com/ISteamApps/GetAppList/v2/'
+        res = requests.get(url, allow_redirects=True)
+        open(applist, 'wb').write(res.content)
+
     if mountpoint is None:
         mountpoint = BaseDirectory.save_data_path("SteamFuse")
     try:
-        FUSE(SteamFuse(root), mountpoint, nothreads=True, foreground=True)
+        FUSE(SteamFuse(root, applist), mountpoint, nothreads=True, foreground=True)
     except RuntimeError:
         pass
 
