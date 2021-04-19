@@ -1,0 +1,6 @@
+[submodule "fusepy"]
+	path = fusepy
+	url = https://github.com/fusepy/fusepy
+[submodule "python-fuse-sample"]
+	path = python-fuse-sample
+	url = https://github.com/skorokithakis/python-fuse-sample
