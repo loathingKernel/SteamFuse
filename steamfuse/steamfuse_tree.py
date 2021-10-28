@@ -6,15 +6,11 @@ Documentation, License etc.
 
 import os
 import re
-import sys
+import subprocess
 
-import requests
 import orjson
 import vdf
-from xdg import BaseDirectory
-
-from fusepy.fuse import FUSE
-from passthrough import Passthrough
+from passthrough.passthrough import Passthrough
 
 
 class SteamPath(object):
@@ -23,19 +19,30 @@ class SteamPath(object):
 
 
 class SteamFuse(Passthrough):
-    def __init__(self, root, applist):
-        self.root = os.path.join(root, "steamapps")
-        vdf_data = vdf.load(open(os.path.join(self.root, "libraryfolders.vdf"), 'r'))
+    def __init__(self, mountpoint, steam_root, applist):
+        self.mountpoint = mountpoint
+        self.mergerfs_mount = os.path.join(mountpoint, 'mergerfs')
+        self.steamfuse_mount = os.path.join(mountpoint, 'steamfuse')
+        super(SteamFuse, self).__init__(self.mergerfs_mount)
+        self.steam_root = os.path.join(steam_root, 'steamapps')
+        vdf_data = vdf.load(open(os.path.join(self.steam_root, 'libraryfolders.vdf'), 'r'))
         self.other_roots = [
-            os.path.join(value, "steamapps") for key, value in vdf_data["LibraryFolders"].items() if key.isdigit()
+            os.path.join(folder['path'], 'steamapps') for key, folder in vdf_data['libraryfolders'].items()
+            if key.isdigit() and int(key) > 0
         ]
 
+        proc = subprocess.Popen(
+            ['mergerfs', f'{self.steam_root}:{":".join(self.other_roots)}', f'{self.mergerfs_mount}'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, text=True)
+        out, err = proc.communicate()
+        if err:
+            exit(-1)
+
         self.local_appids = dict()
-        for library in [self.root, *self.other_roots]:
-            for file in os.listdir(library):
-                if file.endswith('.acf'):
-                    vdf_data = vdf.load(open(os.path.join(library, file), 'r'))
-                    self.local_appids.update({vdf_data["AppState"]["appid"]: vdf_data["AppState"]["installdir"]})
+        for file in os.listdir(self.mergerfs_mount):
+            if file.endswith('.acf'):
+                vdf_data = vdf.load(open(os.path.join(self.mergerfs_mount, file), 'r'))
+                self.local_appids.update({vdf_data["AppState"]["appid"]: vdf_data["AppState"]["installdir"]})
 
         self.remote_appids = dict()
         for app in orjson.loads(open(applist, 'r').read())['applist']['apps']:
@@ -45,16 +52,34 @@ class SteamFuse(Passthrough):
 
         self.paths = dict()
 
+    def __del__(self):
+        proc = subprocess.Popen(
+            ['fusermount', '-u', f'{self.mergerfs_mount}'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, text=True)
+        out, err = proc.communicate()
+        if err:
+            exit(-1)
+
     # Helpers
     # =======
     def _full_path(self, partial):
-        try:
-            partial = self.paths[partial]
-        except KeyError:
-            pass
+        partial = self._find_path(partial)
         if partial.startswith("/"):
             partial = partial[1:]
-        path = os.path.join(self.root, partial)
+        path = os.path.join(self.mergerfs_mount, partial)
+        return path
+
+    def _find_path(self, path):
+        parts = path.split('/')
+        paths = [os.path.join('/', *parts[:i]) for i in range(1, len(parts)+1)]
+        paths.reverse()
+        for p in paths:
+            try:
+                path = self.paths[p]
+                break
+            except KeyError:
+                continue
+        path = os.path.join(path, *parts[len(path.split('/')):])
         return path
 
     # Filesystem methods
@@ -74,7 +99,7 @@ class SteamFuse(Passthrough):
         if os.path.isdir(full_path):
             dir_list = os.listdir(full_path)
             for idx, appid in enumerate(dir_list):
-                is_acf = self.re_acf.search(appid)
+                is_acf = self.re_acf.search(str(appid))
                 fuse_name = None
                 real_name = dir_list[idx]
 
@@ -107,15 +132,8 @@ class SteamFuse(Passthrough):
 
                 if fuse_name is not None:
                     fuse_path = path + "/" + fuse_name
-                    if path in self.paths.keys():
-                        path = self.paths[path]
+                    path = self._find_path(path)
                     real_path = path + "/" + real_name
-                    if fuse_path not in self.paths:
-                        self.paths.update({fuse_path: real_path})
-
-                elif path in self.paths.keys():
-                    fuse_path = path + "/" + real_name
-                    real_path = self.paths[path] + "/" + real_name
                     if fuse_path not in self.paths:
                         self.paths.update({fuse_path: real_path})
 
@@ -123,28 +141,10 @@ class SteamFuse(Passthrough):
         for r in dirents:
             yield r
 
+    def rename(self, old, new):
+        if old in self.paths.keys():
+            return None
+        return os.rename(self._full_path(old), self._full_path(new))
+
     # File methods
     # ============
-
-
-def main(root, mountpoint=None):
-
-    applist = os.path.join(BaseDirectory.save_cache_path("SteamFuse"), "applist.json")
-    if not os.path.exists(applist):
-        url = 'https://api.steampowered.com/ISteamApps/GetAppList/v2/'
-        res = requests.get(url, allow_redirects=True)
-        open(applist, 'wb').write(res.content)
-
-    if mountpoint is None:
-        mountpoint = BaseDirectory.save_data_path("SteamFuse")
-    try:
-        FUSE(SteamFuse(root, applist), mountpoint, nothreads=True, foreground=True)
-    except RuntimeError:
-        pass
-
-
-if __name__ == '__main__':
-    if len(sys.argv) > 2:
-        main(sys.argv[1], sys.argv[2])
-    else:
-        main(sys.argv[1])

@@ -5,39 +5,48 @@ Documentation, License etc.
 '''
 
 import os
-import sys
 import re
+import subprocess
 
-import vdf
 import orjson
-from pathlib import Path
-from fusepy.fuse import FUSE
-#from fuse import FUSE
-from passthrough import Passthrough
-from xdg import BaseDirectory
+import vdf
+from passthrough.passthrough import Passthrough
 
 
 class SteamPath(object):
     def __init__(self):
-      return
+        return
+
 
 class SteamFuse(Passthrough):
-    def __init__(self, root):
-        self.root = os.path.join(root, "steamapps")
+    def __init__(self, root, applist, mountpoint):
+        super(SteamFuse, self).__init__(root)
+        self.root = os.path.join(root, 'steamapps')
         vdf_data = vdf.load(open(os.path.join(self.root, "libraryfolders.vdf"), 'r'))
         self.other_roots = [
-            os.path.join(value, "steamapps") for key, value in vdf_data["LibraryFolders"].items() if key.isdigit()
+            os.path.join(folder['path'], 'steamapps') for key, folder in vdf_data["libraryfolders"].items()
+            if key.isdigit() and int(key) > 0
         ]
 
+        self.mountpoint = mountpoint
+        self.mergerfs_mount = os.path.join(mountpoint, 'mergerfs')
+        self.steamfuse_mount = os.path.join(mountpoint, 'steamfuse')
+
+        proc = subprocess.Popen(
+            ['mergerfs', f'{self.root}:{":".join(self.other_roots)}', f'{self.mergerfs_mount}'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, text=True)
+        out, err = proc.communicate()
+        if err:
+            exit(-1)
+
         self.local_appids = dict()
-        for library in [self.root, *self.other_roots]:
-            for file in os.listdir(library):
-                if file.endswith('.acf'):
-                    vdf_data = vdf.load(open(os.path.join(library, file), 'r'))
-                    self.local_appids.update({vdf_data["AppState"]["appid"]: vdf_data["AppState"]["installdir"]})
+        for file in os.listdir(self.mergerfs_mount):
+            if file.endswith('.acf'):
+                vdf_data = vdf.load(open(os.path.join(self.mergerfs_mount, file), 'r'))
+                self.local_appids.update({vdf_data["AppState"]["appid"]: vdf_data["AppState"]["installdir"]})
 
         self.remote_appids = dict()
-        for app in orjson.loads(open('applist.json', 'r').read())['applist']['apps']:
+        for app in orjson.loads(open(applist, 'r').read())['applist']['apps']:
             self.remote_appids.update({str(app['appid']): app['name']})
 
         chars = list()
@@ -49,7 +58,15 @@ class SteamFuse(Passthrough):
         print(chars)
         self.re_path = re.compile(r'(\d\d\d+)\ \(([\s\w\.:\-\!]+)\)[\ \(r\)]*')
         self.re_acf = re.compile(r'(app(?:manifest|workshop)_)(\d\d\d+).acf')
-    
+
+    def __del__(self):
+        proc = subprocess.Popen(
+            ['fusermount', '-u', f'{self.mergerfs_mount}'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, text=True)
+        out, err = proc.communicate()
+        if err:
+            exit(-1)
+
     # Helpers
     # =======
     def _full_path(self, partial):
@@ -66,7 +83,7 @@ class SteamFuse(Passthrough):
         print("partial after: " + partial)
         if partial.startswith("/"):
             partial = partial[1:]
-        path = os.path.join(self.root, partial)
+        path = os.path.join(self.mergerfs_mount, partial)
         return path
 
     # Filesystem methods
@@ -76,7 +93,7 @@ class SteamFuse(Passthrough):
         full_path = self._full_path(path)
         st = os.lstat(full_path)
         return dict((key, getattr(st, key)) for key in (
-            'st_atime', 'st_ctime','st_gid', 'st_mode', 'st_mtime',
+            'st_atime', 'st_ctime', 'st_gid', 'st_mode', 'st_mtime',
             'st_nlink', 'st_size', 'st_uid', 'st_blocks'))
 
     def readdir(self, path, fh):
@@ -104,19 +121,3 @@ class SteamFuse(Passthrough):
 
     # File methods
     # ============
-
-
-def main(root, mountpoint=None):
-    if mountpoint is None:
-        mountpoint = BaseDirectory.save_data_path("SteamFuse")
-    try:
-        FUSE(SteamFuse(root), mountpoint, nothreads=True, foreground=True)
-    except RuntimeError:
-        pass
-
-
-if __name__ == '__main__':
-    if len(sys.argv) > 2:
-        main(sys.argv[1], sys.argv[2])
-    else:
-        main(sys.argv[1])
