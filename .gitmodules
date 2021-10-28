@@ -1,3 +1,3 @@
-[submodule "python-fuse-sample"]
-	path = python-fuse-sample
+[submodule "passthrough"]
+	path = passthrough
 	url = https://github.com/skorokithakis/python-fuse-sample
