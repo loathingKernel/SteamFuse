@@ -6,11 +6,10 @@ Documentation, License etc.
 
 import os
 import re
-import subprocess
 
 import orjson
 import vdf
-from passthrough.passthrough import Passthrough
+from .passthrough.passthrough import Passthrough
 
 
 class SteamPath(object):
@@ -18,54 +17,22 @@ class SteamPath(object):
         return
 
 
-class SteamFuse(Passthrough):
-    def __init__(self, root, applist, mountpoint):
-        super(SteamFuse, self).__init__(root)
-        self.root = os.path.join(root, 'steamapps')
-        vdf_data = vdf.load(open(os.path.join(self.root, "libraryfolders.vdf"), 'r'))
-        self.other_roots = [
-            os.path.join(folder['path'], 'steamapps') for key, folder in vdf_data["libraryfolders"].items()
-            if key.isdigit() and int(key) > 0
-        ]
-
-        self.mountpoint = mountpoint
-        self.mergerfs_mount = os.path.join(mountpoint, 'mergerfs')
-        self.steamfuse_mount = os.path.join(mountpoint, 'steamfuse')
-
-        proc = subprocess.Popen(
-            ['mergerfs', f'{self.root}:{":".join(self.other_roots)}', f'{self.mergerfs_mount}'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, text=True)
-        out, err = proc.communicate()
-        if err:
-            exit(-1)
+class SteamFuseRegex(Passthrough):
+    def __init__(self, root, applist):
+        super(SteamFuseRegex, self).__init__(root)
 
         self.local_appids = dict()
-        for file in os.listdir(self.mergerfs_mount):
+        for file in os.listdir(root):
             if file.endswith('.acf'):
-                vdf_data = vdf.load(open(os.path.join(self.mergerfs_mount, file), 'r'))
+                vdf_data = vdf.load(open(os.path.join(root, file), 'r'))
                 self.local_appids.update({vdf_data["AppState"]["appid"]: vdf_data["AppState"]["installdir"]})
 
         self.remote_appids = dict()
         for app in orjson.loads(open(applist, 'r').read())['applist']['apps']:
             self.remote_appids.update({str(app['appid']): app['name']})
 
-        chars = list()
-        for i in self.local_appids.values():
-            for c in i:
-                if c not in chars:
-                    chars.append(c)
-        chars.sort()
-        print(chars)
         self.re_path = re.compile(r'(\d\d\d+)\ \(([\s\w\.:\-\!]+)\)[\ \(r\)]*')
         self.re_acf = re.compile(r'(app(?:manifest|workshop)_)(\d\d\d+).acf')
-
-    def __del__(self):
-        proc = subprocess.Popen(
-            ['fusermount', '-u', f'{self.mergerfs_mount}'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False, text=True)
-        out, err = proc.communicate()
-        if err:
-            exit(-1)
 
     # Helpers
     # =======
@@ -83,7 +50,7 @@ class SteamFuse(Passthrough):
         print("partial after: " + partial)
         if partial.startswith("/"):
             partial = partial[1:]
-        path = os.path.join(self.mergerfs_mount, partial)
+        path = os.path.join(self.root, partial)
         return path
 
     # Filesystem methods
@@ -106,7 +73,9 @@ class SteamFuse(Passthrough):
                 result = self.re_acf.search(appid)
                 if result:
                     appid = result.group(2)
-                    dir_list[idx] = re.sub(self.re_acf, "{0}{1} ({2}).acf".format(result.group(1), appid, self.local_appids[appid]), dir_list[idx])
+                    dir_list[idx] = re.sub(
+                        self.re_acf,
+                        "{0}{1} ({2}).acf".format(result.group(1), appid, self.local_appids[appid]), dir_list[idx])
                 elif appid in self.local_appids.keys():
                     appname = self.local_appids[appid]
                     dir_name = "{0} ({1})".format(appid, appname)
