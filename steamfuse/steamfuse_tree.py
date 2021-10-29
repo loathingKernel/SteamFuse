@@ -74,7 +74,7 @@ class SteamFuseTree(Passthrough):
         if os.path.isdir(full_path):
             dir_list = os.listdir(full_path)
             for idx, appid in enumerate(dir_list):
-                is_acf = self.re_acf.search(appid)
+                is_acf = self.re_acf.search(str(appid))
                 fuse_name = None
                 real_name = dir_list[idx]
 
@@ -86,13 +86,9 @@ class SteamFuseTree(Passthrough):
                         appname = self.remote_appids[appid]
                     else:
                         continue
-                    fuse_name = re.sub(
-                        self.re_acf,
-                        "{0}{1} ({2}).acf".format(
-                            is_acf.group(1),
-                            appid,
-                            appname),
-                        dir_list[idx])
+                    fuse_name = re.sub(self.re_acf,
+                                       f'{is_acf.group(1)}{appid} ({appname}).acf',
+                                       str(dir_list[idx]))
                     dir_list[idx] = fuse_name
 
                 elif appid in self.local_appids.keys():
@@ -106,9 +102,9 @@ class SteamFuseTree(Passthrough):
                     dir_list[idx] = fuse_name
 
                 if fuse_name is not None:
-                    fuse_path = path + "/" + fuse_name
+                    fuse_path = os.path.join(path, fuse_name)
                     path = self._find_path(path)
-                    real_path = path + "/" + real_name
+                    real_path = os.path.join(path, real_name)
                     if fuse_path not in self.paths:
                         self.paths.update({fuse_path: real_path})
 

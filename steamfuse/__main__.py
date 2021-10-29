@@ -59,7 +59,7 @@ def main(steam_path=None, mountpoint=None):
     if not os.path.exists(mountpoint):
         os.mkdir(mountpoint)
     try:
-        FUSE(SteamFuseRegex(mergerfs_path, applist), mountpoint=mountpoint, nothreads=True, foreground=True)
+        FUSE(SteamFuseTree(mergerfs_path, applist), mountpoint=mountpoint, nothreads=True, foreground=True)
     except RuntimeError:
         pass
 

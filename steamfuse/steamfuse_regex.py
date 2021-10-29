@@ -31,8 +31,8 @@ class SteamFuseRegex(Passthrough):
         for app in orjson.loads(open(applist, 'r').read())['applist']['apps']:
             self.remote_appids.update({str(app['appid']): app['name']})
 
-        self.re_path = re.compile(r'(\d\d\d+)\ \(([\s\w\.:\-\!]+)\)[\ \(r\)]*')
         self.re_acf = re.compile(r'(app(?:manifest|workshop)_)(\d\d\d+).acf')
+        self.re_path = re.compile(r'(\d\d\d+)\ \(([\s\w\.:\-\!]+)\)[\ \(r\)]*')
 
     # Helpers
     # =======
@@ -70,19 +70,19 @@ class SteamFuseRegex(Passthrough):
         if os.path.isdir(full_path):
             dir_list = os.listdir(full_path)
             for idx, appid in enumerate(dir_list):
-                result = self.re_acf.search(appid)
+                result = self.re_acf.search(str(appid))
                 if result:
                     appid = result.group(2)
-                    dir_list[idx] = re.sub(
-                        self.re_acf,
-                        "{0}{1} ({2}).acf".format(result.group(1), appid, self.local_appids[appid]), dir_list[idx])
+                    dir_list[idx] = re.sub(self.re_acf,
+                                           f'{result.group(1)}{appid} ({self.local_appids[appid]}).acf',
+                                           str(dir_list[idx]))
                 elif appid in self.local_appids.keys():
                     appname = self.local_appids[appid]
-                    dir_name = "{0} ({1})".format(appid, appname)
+                    dir_name = f'{appid} ({appname})'
                     dir_list[idx] = dir_name
                 elif appid in self.remote_appids.keys():
-                    appname = self.remote_appids[appid]
-                    dir_name = "{0} ({1}) (r)".format(appid, appname)
+                    appname = self.remote_appids[str(appid)]
+                    dir_name = f'{appid} ({appname}) (r)'
                     dir_list[idx] = dir_name
             dirents.extend(dir_list)
         for r in dirents:
